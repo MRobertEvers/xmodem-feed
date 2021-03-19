@@ -44,6 +44,7 @@ enum _xmodem_state
 {
 	XMODEM_STATE_INIT,
 	XMODEM_STATE_BEGIN,
+	XMODEM_STATE_CONTROL,
 	XMODEM_STATE_RECEIVE,
 	XMODEM_STATE_DATA,
 	XMODEM_STATE_DONE,
@@ -103,39 +104,6 @@ crc16_ccitt(const void* buf, int len)
 }
 
 /**
- * Allocates the required memory for the XModem protocol.
- *
- * Starts XModem in XModemCRC mode.
- *
- * @param rXModemHandle [OUT] Returns an xmodem handle.
- * @returns XMODEM_STATUS_ERR if not enough memory; XMODEM_STATUS_OK if success
- */
-xmodem_status_t
-xmodem_receive_init(xmodem_state_t* r_modem)
-{
-	if( !r_modem )
-	{
-		return XMODEM_STATUS_ERR;
-	}
-
-	memset(r_modem, 0x00, sizeof(xmodem_state_t));
-
-	r_modem->read_len = 0;
-	r_modem->retries = 16;
-	r_modem->in_buffer_len = 0;
-	r_modem->packet_size = 0;
-	r_modem->last_err = XMODEM_ERR_NONE;
-	r_modem->packet_num = 1;
-	r_modem->mode = XMODEM_MODE_CRC;
-
-	r_modem->out_buffer_len = 0;
-
-	r_modem->state = XMODEM_STATE_BEGIN;
-
-	return XMODEM_STATUS_OK;
-}
-
-/**
  * Calculates Checksum or CRC of the given input.
  *
  * @param crc [IN] 1 if CRC is to be used; 0 if checksum
@@ -175,6 +143,39 @@ _xmodem_set_transmit_byte(xmodem_state_t* p_modem, char out_byte)
 	p_modem->out_buffer[0] = out_byte;
 	p_modem->out_buffer_len = 1;
 }
+/**
+ * Allocates the required memory for the XModem protocol.
+ *
+ * Starts XModem in XModemCRC mode.
+ *
+ * @param rXModemHandle [OUT] Returns an xmodem handle.
+ * @returns XMODEM_STATUS_ERR if not enough memory; XMODEM_STATUS_OK if success
+ */
+xmodem_status_t
+xmodem_receive_init(xmodem_state_t* r_modem)
+{
+	if( !r_modem )
+	{
+		return XMODEM_STATUS_ERR;
+	}
+
+	memset(r_modem, 0x00, sizeof(xmodem_state_t));
+
+	r_modem->read_len = 0;
+	r_modem->retries = 16;
+	r_modem->in_buffer_len = 0;
+	r_modem->packet_size = 0;
+	r_modem->last_err = XMODEM_ERR_NONE;
+	r_modem->packet_num = 1;
+	r_modem->mode = XMODEM_MODE_CRC;
+
+	r_modem->out_buffer_len = 0;
+
+	r_modem->state = XMODEM_STATE_BEGIN;
+
+	return XMODEM_STATUS_OK;
+}
+
 
 /**
  * Handles the XModem protocol.
@@ -218,7 +219,7 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 
 	if( p_modem->packet_num == 1 )
 	{
-		p_modem->state = XMODEM_STATE_RECEIVE;
+		p_modem->state = XMODEM_STATE_CONTROL;
 
 		_xmodem_set_transmit_byte(p_modem, control_char);
 
@@ -226,7 +227,7 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 	}
 	else
 	{
-		p_modem->state = XMODEM_STATE_RECEIVE;
+		p_modem->state = XMODEM_STATE_CONTROL;
 
 		result = XMODEM_STATUS_OK;
 	}
@@ -235,7 +236,7 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 }
 
 xmodem_status_t
-xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buffer_len, uint32_t* r_bytes_processed)
+xmodem_receive_control(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buffer_len, uint32_t* r_bytes_processed)
 {
 	if( !p_modem )
 	{
@@ -250,129 +251,145 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 	}
 
 	xmodem_status_t result = XMODEM_STATUS_ERR;
+	p_modem->in_buffer[0] = in_buffer[0];
+	p_modem->in_buffer_len = 1;
 
-	if( p_modem->in_buffer_len == 0 )
+	char c = p_modem->in_buffer[0];
+	switch( c )
 	{
-		p_modem->in_buffer[0] = in_buffer[0];
-		p_modem->in_buffer_len += 1;
+	case SOH:
+	{
+		p_modem->packet_size = 128;
+		p_modem->read_len = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
 
-		char c = p_modem->in_buffer[0];
-		switch( c )
-		{
-		case SOH:
-		{
-			p_modem->packet_size = 128;
-			p_modem->read_len = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
+		p_modem->state = XMODEM_STATE_RECEIVE;
 
-			result = XMODEM_STATUS_OK;
-			break;
-		}
-		case STX:
-		{
-			p_modem->packet_size = 1024;
-			p_modem->read_len = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
+		result = XMODEM_STATUS_OK;
+		break;
+	}
+	case STX:
+	{
+		p_modem->packet_size = 1024;
+		p_modem->read_len = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
 
-			result = XMODEM_STATUS_OK;
-			break;
-		}
-		case EOT:
-		{
-			p_modem->state = XMODEM_STATE_DONE;
+		p_modem->state = XMODEM_STATE_RECEIVE;
 
-			_xmodem_set_transmit_byte(p_modem, ACK);
+		result = XMODEM_STATUS_OK;
+		break;
+	}
+	case EOT:
+	{
+		p_modem->state = XMODEM_STATE_DONE;
 
-			result = XMODEM_STATUS_TRANSMIT; /* normal end */
-			break;
-		}
-		case CAN:
+		_xmodem_set_transmit_byte(p_modem, ACK);
+
+		result = XMODEM_STATUS_TRANSMIT; /* normal end */
+		break;
+	}
+	case CAN:
+	{
+		p_modem->state = XMODEM_STATE_ERR;
+		p_modem->last_err = XMODEM_ERR_CANCELLED_BY_REMOTE;
+
+		_xmodem_set_transmit_byte(p_modem, ACK);
+
+		result = XMODEM_STATUS_TRANSMIT;
+		break;
+	}
+	default:
+		p_modem->state = XMODEM_STATE_ERR;
+		p_modem->last_err = XMODEM_ERR_SYNC_ERROR;
+
+		result = XMODEM_STATUS_OK;
+		break;
+	}
+
+	*r_bytes_processed += 1;
+
+	return result;
+}
+
+xmodem_status_t
+xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buffer_len, uint32_t* r_bytes_processed)
+{
+	if( !p_modem )
+	{
+		return XMODEM_STATUS_ERR;
+	}
+
+	if( in_buffer_len == 0 )
+	{
+		return XMODEM_STATUS_OK;
+	}
+
+	xmodem_status_t result = XMODEM_STATUS_ERR;
+
+	int buffer_remaining = sizeof(p_modem->in_buffer) - p_modem->in_buffer_len - 1;
+	int read_bytes = in_buffer_len < buffer_remaining ? in_buffer_len : buffer_remaining;
+
+	memcpy(p_modem->in_buffer + p_modem->in_buffer_len, in_buffer, read_bytes);
+	p_modem->in_buffer_len += read_bytes;
+
+	p_modem->read_len -= read_bytes;
+	if( p_modem->read_len < 0 )
+	{
+		p_modem->read_len = 0;
+	}
+
+	// There is an extra byte in crc mode
+	int data_needed = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
+
+	// Don't count the already read control char.
+	if( p_modem->in_buffer_len - 1 >= data_needed )
+	{
+		uint8_t current_packet_num = p_modem->packet_num;
+		uint8_t received_packet_num = p_modem->in_buffer[1];
+		uint8_t inverse_packet_num = ~(uint8_t)(p_modem->in_buffer[2]);
+
+		if( (current_packet_num == received_packet_num) && // Received packet is the expected packet
+			(received_packet_num == inverse_packet_num) && // Received packet hasn't suffered a bitflip
+			_xmodem_check_packet(
+				p_modem->mode == XMODEM_MODE_CRC,
+				p_modem->in_buffer + 3,
+				p_modem->packet_size) // CRC or Checksum is correct
+		)
 		{
-			p_modem->state = XMODEM_STATE_ERR;
-			p_modem->last_err = XMODEM_ERR_CANCELLED_BY_REMOTE;
+			p_modem->retries = 16;
+			p_modem->state = XMODEM_STATE_DATA;
+			p_modem->packet_num += 1;
 
 			_xmodem_set_transmit_byte(p_modem, ACK);
 
 			result = XMODEM_STATUS_TRANSMIT;
-			break;
 		}
-		default:
-			p_modem->state = XMODEM_STATE_ERR;
-			p_modem->last_err = XMODEM_ERR_SYNC_ERROR;
-
-			result = XMODEM_STATUS_OK;
-			break;
-		}
-
-		*r_bytes_processed += 1;
-	}
-	else
-	{
-		int buffer_remaining = sizeof(p_modem->in_buffer) - p_modem->in_buffer_len - 1;
-		int read_bytes = in_buffer_len < buffer_remaining ? in_buffer_len : buffer_remaining;
-
-		memcpy(p_modem->in_buffer + p_modem->in_buffer_len, in_buffer, read_bytes);
-		p_modem->in_buffer_len += read_bytes;
-
-		p_modem->read_len -= read_bytes;
-		if( p_modem->read_len < 0 )
+		else if( p_modem->retries > 0 )
 		{
-			p_modem->read_len = 0;
-		}
+			p_modem->retries -= 1;
 
-		// There is an extra byte in crc mode
-		int data_needed = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
+			p_modem->state = XMODEM_STATE_BEGIN;
 
-		// Don't count the already read control char.
-		if( p_modem->in_buffer_len - 1 >= data_needed )
-		{
-			uint8_t current_packet_num = p_modem->packet_num;
-			uint8_t received_packet_num = p_modem->in_buffer[1];
-			uint8_t inverse_packet_num = ~(uint8_t)(p_modem->in_buffer[2]);
+			_xmodem_set_transmit_byte(p_modem, NAK);
 
-			if( (current_packet_num == received_packet_num) && // Received packet is the expected packet
-				(received_packet_num == inverse_packet_num) && // Received packet hasn't suffered a bitflip
-				_xmodem_check_packet(
-					p_modem->mode == XMODEM_MODE_CRC,
-					p_modem->in_buffer + 3,
-					p_modem->packet_size) // CRC or Checksum is correct
-			)
-			{
-				p_modem->retries = 16;
-				p_modem->state = XMODEM_STATE_DATA;
-				p_modem->packet_num += 1;
-
-				_xmodem_set_transmit_byte(p_modem, ACK);
-
-				result = XMODEM_STATUS_TRANSMIT;
-			}
-			else if( p_modem->retries > 0 )
-			{
-				p_modem->retries -= 1;
-
-				p_modem->state = XMODEM_STATE_BEGIN;
-
-				_xmodem_set_transmit_byte(p_modem, NAK);
-
-				result = XMODEM_STATUS_TRANSMIT;
-			}
-			else
-			{
-				p_modem->state = XMODEM_STATE_ERR;
-				p_modem->last_err = XMODEM_ERR_TOO_MANY_RETRIES;
-
-				memset(p_modem->out_buffer, CAN, 3);
-				p_modem->out_buffer_len = 3;
-
-				result = XMODEM_STATUS_TRANSMIT;
-			}
+			result = XMODEM_STATUS_TRANSMIT;
 		}
 		else
 		{
-			// Wait for more data
-			result = XMODEM_STATUS_OK;
-		}
+			p_modem->state = XMODEM_STATE_ERR;
+			p_modem->last_err = XMODEM_ERR_TOO_MANY_RETRIES;
 
-		*r_bytes_processed += read_bytes;
+			memset(p_modem->out_buffer, CAN, 3);
+			p_modem->out_buffer_len = 3;
+
+			result = XMODEM_STATUS_TRANSMIT;
+		}
 	}
+	else
+	{
+		// Wait for more data
+		result = XMODEM_STATUS_OK;
+	}
+
+	*r_bytes_processed += read_bytes;
 
 	return result;
 }
@@ -448,6 +465,10 @@ test()
 			}
 			status = xmodem_receive_begin(&xmodem);
 			break;
+		case XMODEM_STATE_CONTROL:
+			status =
+				xmodem_receive_control(&xmodem, in_buf + bytes_processed, 1029 - bytes_processed, &bytes_processed);
+			break;
 		case XMODEM_STATE_RECEIVE:
 			status = xmodem_receive_data(&xmodem, in_buf + bytes_processed, 1029 - bytes_processed, &bytes_processed);
 			break;
@@ -499,153 +520,154 @@ int
 main()
 {
 	test();
-	//----------------------
-	// Initialize Winsock
-	WSADATA wsaData;
-	int iResult = 0;
+	 	//----------------------
+	 	// Initialize Winsock
+	 	WSADATA wsaData;
+	 	int iResult = 0;
 
-	SOCKET ListenSocket = INVALID_SOCKET;
-	sockaddr_in service;
+	 	SOCKET ListenSocket = INVALID_SOCKET;
+	 	sockaddr_in service;
 
-	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-	if( iResult != NO_ERROR )
-	{
-		wprintf(L"WSAStartup() failed with error: %d\n", iResult);
-		return 1;
-	}
-	//----------------------
-	// Create a SOCKET for listening for incoming connection requests.
-	ListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if( ListenSocket == INVALID_SOCKET )
-	{
-		wprintf(L"socket function failed with error: %ld\n", WSAGetLastError());
-		WSACleanup();
-		return 1;
-	}
-	//----------------------
-	// The sockaddr_in structure specifies the address family,
-	// IP address, and port for the socket that is being bound.
-	service.sin_family = AF_INET;
-	service.sin_addr.s_addr = inet_addr("127.0.0.1");
-	service.sin_port = htons(8080);
+	 	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	 	if( iResult != NO_ERROR )
+	 	{
+	 		wprintf(L"WSAStartup() failed with error: %d\n", iResult);
+	 		return 1;
+	 	}
+	 	//----------------------
+	 	// Create a SOCKET for listening for incoming connection requests.
+	 	ListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	 	if( ListenSocket == INVALID_SOCKET )
+	 	{
+	 		wprintf(L"socket function failed with error: %ld\n", WSAGetLastError());
+	 		WSACleanup();
+	 		return 1;
+	 	}
+	 	//----------------------
+	 	// The sockaddr_in structure specifies the address family,
+	 	// IP address, and port for the socket that is being bound.
+	 	service.sin_family = AF_INET;
+	 	service.sin_addr.s_addr = inet_addr("127.0.0.1");
+	 	service.sin_port = htons(8080);
 
-	iResult = bind(ListenSocket, (SOCKADDR*)&service, sizeof(service));
-	if( iResult == SOCKET_ERROR )
-	{
-		wprintf(L"bind function failed with error %d\n", WSAGetLastError());
-		iResult = closesocket(ListenSocket);
-		if( iResult == SOCKET_ERROR )
-			wprintf(L"closesocket function failed with error %d\n", WSAGetLastError());
-		WSACleanup();
-		return 1;
-	}
-	//----------------------
-	// Listen for incoming connection requests
-	// on the created socket
-	if( listen(ListenSocket, SOMAXCONN) == SOCKET_ERROR )
-		wprintf(L"listen function failed with error: %d\n", WSAGetLastError());
+	 	iResult = bind(ListenSocket, (SOCKADDR*)&service, sizeof(service));
+	 	if( iResult == SOCKET_ERROR )
+	 	{
+	 		wprintf(L"bind function failed with error %d\n", WSAGetLastError());
+	 		iResult = closesocket(ListenSocket);
+	 		if( iResult == SOCKET_ERROR )
+	 			wprintf(L"closesocket function failed with error %d\n", WSAGetLastError());
+	 		WSACleanup();
+	 		return 1;
+	 	}
+	 	//----------------------
+	 	// Listen for incoming connection requests
+	 	// on the created socket
+	 	if( listen(ListenSocket, SOMAXCONN) == SOCKET_ERROR )
+	 		wprintf(L"listen function failed with error: %d\n", WSAGetLastError());
 
-	wprintf(L"Listening on socket...\n");
+	 	wprintf(L"Listening on socket...\n");
 
-	// Create a SOCKET for accepting incoming requests.
-	SOCKET AcceptSocket;
-	wprintf(L"Waiting for client to connect...\n");
+	 	// Create a SOCKET for accepting incoming requests.
+	 	SOCKET AcceptSocket;
+	 	wprintf(L"Waiting for client to connect...\n");
 
-	//----------------------
-	// Accept the connection.
-	AcceptSocket = accept(ListenSocket, NULL, NULL);
-	if( AcceptSocket == INVALID_SOCKET )
-	{
-		wprintf(L"accept failed with error: %ld\n", WSAGetLastError());
-		closesocket(ListenSocket);
-		WSACleanup();
-		return 1;
-	}
-	else
-		wprintf(L"Client connected.\n");
-	DWORD timeout_ms = 1000;
-	setsockopt(AcceptSocket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
+	 	//----------------------
+	 	// Accept the connection.
+	 	AcceptSocket = accept(ListenSocket, NULL, NULL);
+	 	if( AcceptSocket == INVALID_SOCKET )
+	 	{
+	 		wprintf(L"accept failed with error: %ld\n", WSAGetLastError());
+	 		closesocket(ListenSocket);
+	 		WSACleanup();
+	 		return 1;
+	 	}
+	 	else
+	 		wprintf(L"Client connected.\n");
+	 	DWORD timeout_ms = 1000;
+	 	setsockopt(AcceptSocket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
 
-	xmodem_status_t status;
-	xmodem_state_t xmodem;
-	xmodem_receive_init(&xmodem);
-	uint8_t in_buf[2048] = {0};
-	int bytes_read = 0;
-	uint32_t total_read = 0;
-	uint32_t bytes_recved = 0;
-	uint32_t bytes_processed = 0;
-	uint8_t recv_buf[2048] = {0};
-	while( true )
-	{
-		switch( xmodem.state )
-		{
-		case XMODEM_STATE_INIT:
-			break;
-		case XMODEM_STATE_BEGIN:
-			total_read = 0;
-			status = xmodem_receive_begin(&xmodem);
-			break;
-		case XMODEM_STATE_RECEIVE:
-			bytes_processed = 0;
-			status = xmodem_receive_data(&xmodem, in_buf, bytes_read, &bytes_processed);
-			break;
-		case XMODEM_STATE_DATA:
-			status = xmodem_receive_flush(&xmodem, recv_buf, sizeof(recv_buf), &bytes_recved);
-			break;
-		case XMODEM_STATE_DONE:
-			goto done;
-			break;
-		case XMODEM_STATE_ERR:
-			goto done;
-			break;
-		}
+	 	xmodem_status_t status;
+	 	xmodem_state_t xmodem;
+	 	xmodem_receive_init(&xmodem);
+	 	uint8_t in_buf[2048] = {0};
+	 	int bytes_read = 0;
+	 	uint32_t total_read = 0;
+	 	uint32_t bytes_recved = 0;
+	 	uint32_t bytes_processed = 0;
+	 	uint8_t recv_buf[2048] = {0};
+	 	while( true )
+	 	{
+	 		switch( xmodem.state )
+	 		{
+	 		case XMODEM_STATE_INIT:
+	 			break;
+	 		case XMODEM_STATE_BEGIN:
+	 			total_read = 0;
+	 			status = xmodem_receive_begin(&xmodem);
+	 			break;
+	 		case XMODEM_STATE_CONTROL:
+	 			status = xmodem_receive_control(&xmodem, in_buf, bytes_read, &bytes_processed);
+	 			break;
+	 		case XMODEM_STATE_RECEIVE:
+	 			status = xmodem_receive_data(&xmodem, in_buf, bytes_read, &bytes_processed);
+	 			break;
+	 		case XMODEM_STATE_DATA:
+	 			status = xmodem_receive_flush(&xmodem, recv_buf, sizeof(recv_buf), &bytes_recved);
+	 			break;
+	 		case XMODEM_STATE_DONE:
+	 			goto done;
+	 			break;
+	 		case XMODEM_STATE_ERR:
+	 			goto done;
+	 			break;
+	 		}
 
-		switch( status )
-		{
-		case XMODEM_STATUS_OK:
-			break;
-		case XMODEM_STATUS_TRANSMIT:
-			send(AcceptSocket, (char*)xmodem.out_buffer, xmodem.out_buffer_len, 0);
-			xmodem_transmit_flush(&xmodem);
-			break;
-		case XMODEM_STATUS_ERR:
-			goto done;
-			break;
-		}
+	 		switch( status )
+	 		{
+	 		case XMODEM_STATUS_OK:
+	 			break;
+	 		case XMODEM_STATUS_TRANSMIT:
+	 			send(AcceptSocket, (char*)xmodem.out_buffer, xmodem.out_buffer_len, 0);
+	 			xmodem_transmit_flush(&xmodem);
+	 			break;
+	 		case XMODEM_STATUS_ERR:
+	 			goto done;
+	 			break;
+	 		}
 
-		if( xmodem.last_err == XMODEM_ERR_NONE && xmodem.read_len > 0 )
-		{
-			bytes_read = recv(AcceptSocket, (char*)in_buf, xmodem.read_len, MSG_WAITALL);
-			total_read += bytes_read;
-			if( bytes_read > 0 )
-				printf("Bytes received: %d/%d\n", bytes_read, total_read);
-			else if( bytes_read == 0 )
-				printf("Connection closed\n");
-			else
-			{
-				printf("recv failed: %d\n", WSAGetLastError());
-				bytes_read = 0;
-			}
+	 		if( xmodem.last_err == XMODEM_ERR_NONE && xmodem.read_len > 0 )
+	 		{
+	 			bytes_read = recv(AcceptSocket, (char*)in_buf, xmodem.read_len, MSG_WAITALL);
+	 			total_read += bytes_read;
+	 			if( bytes_read > 0 )
+	 				printf("Bytes received: %d/%d\n", bytes_read, total_read);
+	 			else if( bytes_read == 0 )
+	 				printf("Connection closed\n");
+	 			else
+	 			{
+	 				printf("recv failed: %d\n", WSAGetLastError());
+	 				bytes_read = 0;
+	 			}
+	 		}
 
-		}
+	 		if( bytes_recved > 0 )
+	 		{
+	 			std::cout << recv_buf << std::endl;
+	 			bytes_recved = 0;
+	 		}
+	 	}
 
-		if( bytes_recved > 0 )
-		{
-			std::cout << recv_buf << std::endl;
-			bytes_recved = 0;
-		}
-	}
+	 done:
+	 	iResult = closesocket(ListenSocket);
+	 	if( iResult == SOCKET_ERROR )
+	 	{
+	 		wprintf(L"closesocket function failed with error %d\n", WSAGetLastError());
+	 		WSACleanup();
+	 		return 1;
+	 	}
 
-done:
-	iResult = closesocket(ListenSocket);
-	if( iResult == SOCKET_ERROR )
-	{
-		wprintf(L"closesocket function failed with error %d\n", WSAGetLastError());
-		WSACleanup();
-		return 1;
-	}
-
-	WSACleanup();
+	 	WSACleanup();
 	return 0;
 }
 
