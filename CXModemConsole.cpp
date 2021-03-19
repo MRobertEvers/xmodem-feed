@@ -53,6 +53,8 @@ typedef enum _xmodem_state xmodem_state_e;
 
 struct xmodem_state
 {
+	uint32_t read_len;
+
 	uint8_t in_buffer[1030]; /* 1024 for XModem 1k + 3 head chars + 2 crc + nul */
 	uint32_t in_buffer_len;
 	uint32_t packet_size;
@@ -118,6 +120,7 @@ xmodem_receive_init(xmodem_state_t* r_modem)
 
 	memset(r_modem, 0x00, sizeof(xmodem_state_t));
 
+	r_modem->read_len = 0;
 	r_modem->retries = 16;
 	r_modem->in_buffer_len = 0;
 	r_modem->packet_size = 0;
@@ -212,6 +215,7 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 	p_modem->retries = 16;
 	p_modem->packet_size = 0;
 	p_modem->last_err = XMODEM_ERR_NONE;
+	p_modem->read_len = 1;
 
 	if( p_modem->packet_num == 1 )
 	{
@@ -252,6 +256,7 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 		case SOH:
 		{
 			p_modem->packet_size = 128;
+			p_modem->read_len = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
 
 			result = XMODEM_STATUS_OK;
 			break;
@@ -259,6 +264,7 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 		case STX:
 		{
 			p_modem->packet_size = 1024;
+			p_modem->read_len = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
 
 			result = XMODEM_STATUS_OK;
 			break;
@@ -300,8 +306,15 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 		memcpy(p_modem->in_buffer + p_modem->in_buffer_len, in_buffer, read_bytes);
 		p_modem->in_buffer_len += read_bytes;
 
+		p_modem->read_len -= read_bytes;
+		if( p_modem->read_len < 0 )
+		{
+			p_modem->read_len = 0;
+		}
+
 		// There is an extra byte in crc mode
 		int data_needed = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
+
 		// Don't count the already read control char.
 		if( p_modem->in_buffer_len - 1 >= data_needed )
 		{
@@ -351,7 +364,7 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 			result = XMODEM_STATUS_OK;
 		}
 
-		*r_bytes_processed += in_buffer_len;
+		*r_bytes_processed += read_bytes;
 	}
 
 	return result;
@@ -388,6 +401,13 @@ xmodem_receive_flush(xmodem_state_t* p_modem, uint8_t* r_buffer, uint32_t buffer
 }
 
 void
+xmodem_transmit_flush(xmodem_state_t* p_modem)
+{
+	memset(p_modem->out_buffer, 0x00, sizeof(p_modem->out_buffer));
+	p_modem->out_buffer_len = 0;
+}
+
+void
 test()
 {
 	uint8_t in_buf[2048] = {0};
@@ -396,8 +416,8 @@ test()
 	uint32_t bytes_processed = 0;
 
 	in_buf[0] = STX;
-	in_buf[1] = 0x00;
-	in_buf[2] = ~0x00;
+	in_buf[1] = 0x01;
+	in_buf[2] = ~(uint8_t)0x01;
 	strcpy((char*)in_buf + 3, "Hello");
 
 	uint16_t xsum = crc16_ccitt(in_buf + 3, 1024);
@@ -467,6 +487,7 @@ done:
 int
 main()
 {
+	test();
 	//----------------------
 	// Initialize Winsock
 	WSADATA wsaData;
@@ -548,21 +569,12 @@ main()
 		case XMODEM_STATE_INIT:
 			break;
 		case XMODEM_STATE_BEGIN:
-			status = xmodem_receive_begin(&xmodem);
 			total_read = 0;
+			status = xmodem_receive_begin(&xmodem);
 			break;
 		case XMODEM_STATE_RECEIVE:
-			bytes_read = recv(AcceptSocket, (char*)in_buf + total_read, 1, MSG_WAITALL);
-			if( bytes_read > 0 )
-				printf("Bytes received: %d/%d\n", bytes_read, total_read);
-			else if( bytes_read == 0 )
-				printf("Connection closed\n");
-			else
-				printf("recv failed: %d\n", WSAGetLastError());
-			total_read += bytes_read;
-
-			status = xmodem_receive_data(&xmodem, in_buf + total_read - bytes_read, bytes_read, &bytes_processed);
 			bytes_processed = 0;
+			status = xmodem_receive_data(&xmodem, in_buf, bytes_read, &bytes_processed);
 			break;
 		case XMODEM_STATE_DATA:
 			status = xmodem_receive_flush(&xmodem, recv_buf, sizeof(recv_buf), &bytes_recved);
@@ -581,17 +593,28 @@ main()
 			break;
 		case XMODEM_STATUS_TRANSMIT:
 			send(AcceptSocket, (char*)xmodem.out_buffer, xmodem.out_buffer_len, 0);
-			memset(xmodem.out_buffer, 0x00, sizeof(xmodem.out_buffer));
-			xmodem.out_buffer_len = 0;
+			xmodem_transmit_flush(&xmodem);
 			break;
 		case XMODEM_STATUS_ERR:
 			goto done;
 			break;
 		}
 
+		if( xmodem.last_err == XMODEM_ERR_NONE && xmodem.read_len > 0 )
+		{
+			bytes_read = recv(AcceptSocket, (char*)in_buf, xmodem.read_len, MSG_WAITALL);
+			total_read += bytes_read;
+			if( bytes_read > 0 )
+				printf("Bytes received: %d/%d\n", bytes_read, total_read);
+			else if( bytes_read == 0 )
+				printf("Connection closed\n");
+			else
+				printf("recv failed: %d\n", WSAGetLastError());
+		}
+
 		if( bytes_recved > 0 )
 		{
-			std::cout << recv_buf;
+			std::cout << recv_buf << std::endl;
 			bytes_recved = 0;
 		}
 	}
