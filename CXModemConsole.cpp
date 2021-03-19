@@ -124,7 +124,7 @@ xmodem_receive_init(xmodem_state_t* r_modem)
 	r_modem->packet_size = 0;
 	r_modem->read_len = 0;
 	r_modem->last_err = XMODEM_ERR_NONE;
-	r_modem->packet_num = 0;
+	r_modem->packet_num = 1;
 	r_modem->mode = XMODEM_MODE_CRC;
 
 	r_modem->out_buffer_len = 0;
@@ -216,7 +216,7 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 	p_modem->read_len = 0;
 	p_modem->last_err = XMODEM_ERR_NONE;
 
-	if( p_modem->packet_num == 0 )
+	if( p_modem->packet_num == 1 )
 	{
 		p_modem->state = XMODEM_STATE_RECEIVE;
 
@@ -306,6 +306,7 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 
 		memcpy(p_modem->in_buffer + p_modem->read_len, in_buffer, read_bytes);
 		p_modem->in_buffer_len += read_bytes;
+		p_modem->read_len += read_bytes;
 
 		// There is an extra byte in crc mode
 		int data_needed = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
@@ -550,7 +551,6 @@ main()
 	uint8_t recv_buf[2048] = {0};
 	while( true )
 	{
-
 			switch( xmodem.state )
 			{
 			case XMODEM_STATE_INIT:
@@ -562,7 +562,7 @@ main()
 			case XMODEM_STATE_RECEIVE:
 				bytes_read = recv(AcceptSocket, (char*)in_buf + total_read, 1, MSG_WAITALL);
 				if( bytes_read > 0 )
-					printf("Bytes received: %d\n", bytes_read);
+					printf("Bytes received: %d/%d\n", bytes_read, total_read);
 				else if( bytes_read == 0 )
 					printf("Connection closed\n");
 				else
@@ -570,6 +570,7 @@ main()
 				total_read += bytes_read;
 				
 				status = xmodem_receive_data(&xmodem, in_buf + total_read - bytes_read, bytes_read, &bytes_processed);
+				bytes_processed = 0;
 				break;
 			case XMODEM_STATE_DATA:
 				status = xmodem_receive_flush(&xmodem, recv_buf, sizeof(recv_buf), &bytes_recved);
