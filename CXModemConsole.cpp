@@ -19,9 +19,7 @@ enum xmodem_err
 	XMODEM_ERR_CANCELLED_BY_REMOTE = -1,
 	XMODEM_ERR_SYNC_ERROR = -2,
 	XMODEM_ERR_TOO_MANY_RETRIES = -3,
-	XMODEM_ERR_TRANSMIT_ERROR = -4,
-	XMODEM_ERR_NOMEM = -5,
-	XMODEM_ERR_BAD_HANDLE = -6
+	XMODEM_ERR_NO_DATA = -4,
 };
 typedef enum xmodem_err xmodem_err_t;
 
@@ -319,6 +317,8 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 
 	if( in_buffer_len == 0 )
 	{
+		p_modem->state = XMODEM_STATE_ERR;
+		p_modem->last_err = XMODEM_ERR_NO_DATA;
 		return XMODEM_STATUS_OK;
 	}
 
