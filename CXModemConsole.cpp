@@ -212,7 +212,6 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 	memset(p_modem->out_buffer, 0x00, sizeof(p_modem->out_buffer));
 	p_modem->out_buffer_len = 0;
 
-	p_modem->retries = 16;
 	p_modem->packet_size = 0;
 	p_modem->last_err = XMODEM_ERR_NONE;
 	p_modem->read_len = 1;
@@ -238,9 +237,16 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 xmodem_status_t
 xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buffer_len, uint32_t* r_bytes_processed)
 {
-	if( !p_modem || in_buffer_len == 0 )
+	if( !p_modem )
 	{
 		return XMODEM_STATUS_ERR;
+	}
+
+	if( in_buffer_len == 0 )
+	{
+		p_modem->read_len = 0;
+		p_modem->state = XMODEM_STATE_BEGIN;
+		return XMODEM_STATUS_OK;
 	}
 
 	xmodem_status_t result = XMODEM_STATUS_ERR;
@@ -330,6 +336,7 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 					p_modem->packet_size) // CRC or Checksum is correct
 			)
 			{
+				p_modem->retries = 16;
 				p_modem->state = XMODEM_STATE_DATA;
 				p_modem->packet_num += 1;
 
@@ -435,6 +442,10 @@ test()
 		case XMODEM_STATE_INIT:
 			break;
 		case XMODEM_STATE_BEGIN:
+			if( 1029 - bytes_processed == 0 )
+			{
+				return;
+			}
 			status = xmodem_receive_begin(&xmodem);
 			break;
 		case XMODEM_STATE_RECEIVE:
@@ -552,6 +563,8 @@ main()
 	}
 	else
 		wprintf(L"Client connected.\n");
+	DWORD timeout_ms = 1000;
+	setsockopt(AcceptSocket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
 
 	xmodem_status_t status;
 	xmodem_state_t xmodem;
@@ -609,7 +622,11 @@ main()
 			else if( bytes_read == 0 )
 				printf("Connection closed\n");
 			else
+			{
 				printf("recv failed: %d\n", WSAGetLastError());
+				bytes_read = 0;
+			}
+
 		}
 
 		if( bytes_recved > 0 )
