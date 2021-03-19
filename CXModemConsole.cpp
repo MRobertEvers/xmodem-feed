@@ -60,7 +60,6 @@ struct xmodem_state
 	uint8_t out_buffer[8]; /*Any response chars go here*/
 	uint32_t out_buffer_len;
 
-	uint32_t read_len;
 	int32_t retries;
 	uint32_t packet_num;
 	xmodem_state_e state;
@@ -122,7 +121,6 @@ xmodem_receive_init(xmodem_state_t* r_modem)
 	r_modem->retries = 16;
 	r_modem->in_buffer_len = 0;
 	r_modem->packet_size = 0;
-	r_modem->read_len = 0;
 	r_modem->last_err = XMODEM_ERR_NONE;
 	r_modem->packet_num = 1;
 	r_modem->mode = XMODEM_MODE_CRC;
@@ -213,7 +211,6 @@ xmodem_receive_begin(xmodem_state_t* p_modem)
 
 	p_modem->retries = 16;
 	p_modem->packet_size = 0;
-	p_modem->read_len = 0;
 	p_modem->last_err = XMODEM_ERR_NONE;
 
 	if( p_modem->packet_num == 1 )
@@ -244,7 +241,7 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 
 	xmodem_status_t result = XMODEM_STATUS_ERR;
 
-	if( p_modem->read_len == 0 )
+	if( p_modem->in_buffer_len == 0 )
 	{
 		p_modem->in_buffer[0] = in_buffer[0];
 		p_modem->in_buffer_len += 1;
@@ -256,16 +253,12 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 		{
 			p_modem->packet_size = 128;
 
-			p_modem->read_len += 1;
-
 			result = XMODEM_STATUS_OK;
 			break;
 		}
 		case STX:
 		{
 			p_modem->packet_size = 1024;
-
-			p_modem->read_len += 1;
 
 			result = XMODEM_STATUS_OK;
 			break;
@@ -301,12 +294,11 @@ xmodem_receive_data(xmodem_state_t* p_modem, uint8_t* in_buffer, uint32_t in_buf
 	}
 	else
 	{
-		int buffer_remaining = sizeof(p_modem->in_buffer) - p_modem->read_len - 1;
+		int buffer_remaining = sizeof(p_modem->in_buffer) - p_modem->in_buffer_len - 1;
 		int read_bytes = in_buffer_len < buffer_remaining ? in_buffer_len : buffer_remaining;
 
-		memcpy(p_modem->in_buffer + p_modem->read_len, in_buffer, read_bytes);
+		memcpy(p_modem->in_buffer + p_modem->in_buffer_len, in_buffer, read_bytes);
 		p_modem->in_buffer_len += read_bytes;
-		p_modem->read_len += read_bytes;
 
 		// There is an extra byte in crc mode
 		int data_needed = p_modem->packet_size + (p_modem->mode == XMODEM_MODE_CRC ? 4 : 3);
@@ -523,7 +515,7 @@ main()
 
 	wprintf(L"Listening on socket...\n");
 
-    // Create a SOCKET for accepting incoming requests.
+	// Create a SOCKET for accepting incoming requests.
 	SOCKET AcceptSocket;
 	wprintf(L"Waiting for client to connect...\n");
 
@@ -551,58 +543,58 @@ main()
 	uint8_t recv_buf[2048] = {0};
 	while( true )
 	{
-			switch( xmodem.state )
-			{
-			case XMODEM_STATE_INIT:
-				break;
-			case XMODEM_STATE_BEGIN:
-				status = xmodem_receive_begin(&xmodem);
-				total_read = 0;
-				break;
-			case XMODEM_STATE_RECEIVE:
-				bytes_read = recv(AcceptSocket, (char*)in_buf + total_read, 1, MSG_WAITALL);
-				if( bytes_read > 0 )
-					printf("Bytes received: %d/%d\n", bytes_read, total_read);
-				else if( bytes_read == 0 )
-					printf("Connection closed\n");
-				else
-					printf("recv failed: %d\n", WSAGetLastError());
-				total_read += bytes_read;
-				
-				status = xmodem_receive_data(&xmodem, in_buf + total_read - bytes_read, bytes_read, &bytes_processed);
-				bytes_processed = 0;
-				break;
-			case XMODEM_STATE_DATA:
-				status = xmodem_receive_flush(&xmodem, recv_buf, sizeof(recv_buf), &bytes_recved);
-				break;
-			case XMODEM_STATE_DONE:
-				goto done;
-				break;
-			case XMODEM_STATE_ERR:
-				goto done;
-				break;
-			}
+		switch( xmodem.state )
+		{
+		case XMODEM_STATE_INIT:
+			break;
+		case XMODEM_STATE_BEGIN:
+			status = xmodem_receive_begin(&xmodem);
+			total_read = 0;
+			break;
+		case XMODEM_STATE_RECEIVE:
+			bytes_read = recv(AcceptSocket, (char*)in_buf + total_read, 1, MSG_WAITALL);
+			if( bytes_read > 0 )
+				printf("Bytes received: %d/%d\n", bytes_read, total_read);
+			else if( bytes_read == 0 )
+				printf("Connection closed\n");
+			else
+				printf("recv failed: %d\n", WSAGetLastError());
+			total_read += bytes_read;
 
-			switch( status )
-			{
-			case XMODEM_STATUS_OK:
-				break;
-			case XMODEM_STATUS_TRANSMIT:
-				send(AcceptSocket, (char*)xmodem.out_buffer, xmodem.out_buffer_len, 0);
-				memset(xmodem.out_buffer, 0x00, sizeof(xmodem.out_buffer));
-				xmodem.out_buffer_len = 0;
-				break;
-			case XMODEM_STATUS_ERR:
-				goto done;
-				break;
-			}
-
-			if( bytes_recved > 0 )
-			{
-				std::cout << recv_buf;
-				bytes_recved = 0;
-			}
+			status = xmodem_receive_data(&xmodem, in_buf + total_read - bytes_read, bytes_read, &bytes_processed);
+			bytes_processed = 0;
+			break;
+		case XMODEM_STATE_DATA:
+			status = xmodem_receive_flush(&xmodem, recv_buf, sizeof(recv_buf), &bytes_recved);
+			break;
+		case XMODEM_STATE_DONE:
+			goto done;
+			break;
+		case XMODEM_STATE_ERR:
+			goto done;
+			break;
 		}
+
+		switch( status )
+		{
+		case XMODEM_STATUS_OK:
+			break;
+		case XMODEM_STATUS_TRANSMIT:
+			send(AcceptSocket, (char*)xmodem.out_buffer, xmodem.out_buffer_len, 0);
+			memset(xmodem.out_buffer, 0x00, sizeof(xmodem.out_buffer));
+			xmodem.out_buffer_len = 0;
+			break;
+		case XMODEM_STATUS_ERR:
+			goto done;
+			break;
+		}
+
+		if( bytes_recved > 0 )
+		{
+			std::cout << recv_buf;
+			bytes_recved = 0;
+		}
+	}
 
 done:
 	iResult = closesocket(ListenSocket);
